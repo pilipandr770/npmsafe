@@ -1,0 +1,23 @@
+{
+  "name": "npmsafe",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "description": "npmsafe — інструмент для захисту від supply-chain атак у npm. Перевіряє пакети до інсталяції: AST-аналіз, виявлення підозрілих скриптів (postinstall, eval, child_process), JSON-звіти та інтеграція в CI. Легкий CLI-сканер для розробників і команд.",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "bootstrap": "node scripts/bootstrap_assistant.mjs",
+    "plan": "node scripts/run_assistant_plan.mjs",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "openai": "^4.57.0"
+  }
+}

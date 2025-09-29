@@ -1,0 +1,19 @@
+name: "Bug report"
+description: "Помилка"
+title: "fix: "
+labels: ["bug"]
+body:
+  - type: input
+    id: steps
+    attributes:
+      label: Кроки відтворення
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Очікувано
+  - type: textarea
+    id: actual
+    attributes:
+      label: Фактично

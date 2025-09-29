@@ -1,0 +1,19 @@
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [ main ]
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm i
+      - name: Run assistant plan (optional)
+        if: ${{ secrets.OPENAI_API_KEY != '' }}
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: node scripts/run_assistant_plan.mjs
