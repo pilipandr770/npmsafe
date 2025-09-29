@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { parse } = require('acorn');
-const { simple: walkSimple } = require('acorn-walk');
+const { ancestor: walkAncestor } = require('acorn-walk');
 
 /**
  * Аналіз пакету на предмет безпеки
@@ -147,7 +147,7 @@ function analyzePackageScripts(packageJson) {
       if (issues.length === 0) {
         issues.push({
           type: 'script',
-          severity: 'medium',
+          severity: 'low',
           description: `Lifecycle скрипт ${scriptName} може виконуватися автоматично`,
           details: scriptContent,
           location: `package.json:scripts.${scriptName}`
@@ -169,6 +169,47 @@ async function analyzeJavaScriptFile(filePath, basePath) {
     const content = fs.readFileSync(filePath, 'utf8');
     const relativePath = path.relative(basePath, filePath);
     
+    const locationFor = node => `${relativePath}:${node.loc?.start.line || '?'}`;
+    const suspiciousChildProcessMethods = new Set(['exec', 'spawn', 'fork', 'execSync', 'spawnSync', 'execFile', 'execFileSync']);
+    const childProcessAliases = new Set();
+    const childProcessMethodAliases = new Set();
+    const isIdentifier = (candidate, name) => candidate?.type === 'Identifier' && candidate.name === name;
+    const isStaticString = argument => {
+      if (!argument) return null;
+      if (argument.type === 'Literal' && typeof argument.value === 'string') {
+        return argument.value;
+      }
+      if (argument.type === 'TemplateLiteral' && argument.expressions.length === 0) {
+        return argument.quasis[0]?.value?.cooked || null;
+      }
+      return null;
+    };
+    const isRequireCall = (candidate, moduleName) => {
+      if (!candidate || candidate.type !== 'CallExpression') return false;
+      if (!isIdentifier(candidate.callee, 'require') || candidate.arguments.length === 0) return false;
+      return isStaticString(candidate.arguments[0]) === moduleName;
+    };
+    const getPropertyName = property => {
+      if (!property) return undefined;
+      if (property.type === 'Identifier') return property.name;
+      if (property.type === 'Literal') return property.value;
+      return undefined;
+    };
+    const extractIdentifierName = pattern => {
+      if (!pattern) return undefined;
+      if (pattern.type === 'Identifier') return pattern.name;
+      if (pattern.type === 'AssignmentPattern' && pattern.left.type === 'Identifier') {
+        return pattern.left.name;
+      }
+      return undefined;
+    };
+    const registerChildProcessAlias = name => {
+      if (name) childProcessAliases.add(name);
+    };
+    const registerChildProcessMethodAlias = name => {
+      if (name) childProcessMethodAliases.add(name);
+    };
+
     // Перевірка розміру файлу (великі файли можуть бути обфускованими)
     if (content.length > 100000) {
       issues.push({
@@ -178,80 +219,160 @@ async function analyzeJavaScriptFile(filePath, basePath) {
         location: relativePath
       });
     }
-    
+
     // Парсинг AST
     const ast = parse(content, { 
       ecmaVersion: 2022, 
       sourceType: 'module',
-      allowReturnOutsideFunction: true 
+      allowReturnOutsideFunction: true,
+      allowHashBang: true,
+      locations: true
     });
-    
+
+    childProcessAliases.add('child_process');
+
     // Пошук підозрілих патернів
-    walkSimple(ast, {
-      CallExpression(node) {
-        // eval() виклики
-        if (node.callee.name === 'eval') {
-          issues.push({
-            type: 'ast',
-            severity: 'high',
-            description: 'Використання eval() - небезпечно для виконання коду',
-            location: `${relativePath}:${node.loc?.start.line || '?'}`
-          });
-        }
-        
-        // new Function() конструктор
-        if (node.callee.type === 'NewExpression' && 
-            node.callee.callee && node.callee.callee.name === 'Function') {
-          issues.push({
-            type: 'ast',
-            severity: 'high',
-            description: 'Використання new Function() - динамічне виконання коду',
-            location: `${relativePath}:${node.loc?.start.line || '?'}`
-          });
-        }
-        
-        // child_process методи
-        if (node.callee.type === 'MemberExpression') {
-          const objectName = node.callee.object.name;
-          const propertyName = node.callee.property.name;
-          
-          if (objectName === 'require' && 
-              node.arguments.length > 0 && 
-              node.arguments[0].value === 'child_process') {
+    walkAncestor(ast, {
+      VariableDeclarator(node) {
+        if (isRequireCall(node.init, 'child_process')) {
+          if (node.id.type === 'Identifier') {
+            registerChildProcessAlias(node.id.name);
             issues.push({
               type: 'ast',
               severity: 'high',
-              description: 'Імпорт child_process модуля',
-              location: `${relativePath}:${node.loc?.start.line || '?'}`
+              description: 'Імпорт child_process модуля через require()',
+              location: locationFor(node)
             });
-          }
-          
-          if (['exec', 'spawn', 'fork', 'execSync', 'spawnSync'].includes(propertyName)) {
+          } else if (node.id.type === 'ObjectPattern') {
+            for (const property of node.id.properties) {
+              if (property.type !== 'Property') continue;
+              const aliasName = extractIdentifierName(property.value) || (property.key?.name);
+              registerChildProcessMethodAlias(aliasName);
+            }
             issues.push({
               type: 'ast',
               severity: 'high',
-              description: `Виконання системних команд через ${propertyName}()`,
-              location: `${relativePath}:${node.loc?.start.line || '?'}`
+              description: 'Деструктуризація child_process модуля',
+              location: locationFor(node)
             });
           }
         }
       },
-      
+
+      AssignmentExpression(node) {
+        if (isRequireCall(node.right, 'child_process')) {
+          if (node.left.type === 'Identifier') {
+            registerChildProcessAlias(node.left.name);
+          }
+          issues.push({
+            type: 'ast',
+            severity: 'high',
+            description: 'Присвоєння child_process модуля через require()',
+            location: locationFor(node)
+          });
+        }
+      },
+
       ImportDeclaration(node) {
-        // ES6 імпорти child_process
         if (node.source.value === 'child_process') {
+          for (const specifier of node.specifiers) {
+            if (specifier.type === 'ImportSpecifier') {
+              registerChildProcessMethodAlias(specifier.local.name);
+            } else if (specifier.local) {
+              registerChildProcessAlias(specifier.local.name);
+            }
+          }
           issues.push({
             type: 'ast',
             severity: 'high',
             description: 'ES6 імпорт child_process модуля',
-            location: `${relativePath}:${node.loc?.start.line || '?'}`
+            location: locationFor(node)
+          });
+        }
+      },
+
+      CallExpression(node, ancestors) {
+        if (node.callee.type === 'Identifier' && node.callee.name === 'eval') {
+          issues.push({
+            type: 'ast',
+            severity: 'high',
+            description: 'Використання eval() - небезпечно для виконання коду',
+            location: locationFor(node)
+          });
+        }
+
+        if (node.callee.type === 'Identifier' && childProcessMethodAliases.has(node.callee.name)) {
+          issues.push({
+            type: 'ast',
+            severity: 'high',
+            description: `Виконання системних команд через ${node.callee.name}()`,
+            location: locationFor(node)
+          });
+        }
+
+        if (isRequireCall(node, 'child_process')) {
+          const parent = ancestors[ancestors.length - 2];
+          if (!parent || !['VariableDeclarator', 'AssignmentExpression', 'MemberExpression'].includes(parent.type)) {
+            issues.push({
+              type: 'ast',
+              severity: 'high',
+              description: 'Імпорт child_process модуля через require()',
+              location: locationFor(node)
+            });
+          }
+        }
+
+        if (node.callee.type === 'MemberExpression') {
+          const propertyName = getPropertyName(node.callee.property);
+          const objectNode = node.callee.object;
+
+          if (isRequireCall(objectNode, 'child_process')) {
+            if (propertyName) {
+              registerChildProcessMethodAlias(propertyName);
+            }
+            if (propertyName && suspiciousChildProcessMethods.has(propertyName)) {
+              issues.push({
+                type: 'ast',
+                severity: 'high',
+                description: `Виконання системних команд через ${propertyName}()`,
+                location: locationFor(node)
+              });
+            } else {
+              issues.push({
+                type: 'ast',
+                severity: 'high',
+                description: 'Імпорт child_process модуля',
+                location: locationFor(node)
+              });
+            }
+          }
+
+          if (objectNode.type === 'Identifier' && childProcessAliases.has(objectNode.name)) {
+            if (propertyName && suspiciousChildProcessMethods.has(propertyName)) {
+              issues.push({
+                type: 'ast',
+                severity: 'high',
+                description: `Виконання системних команд через ${propertyName}()`,
+                location: locationFor(node)
+              });
+            }
+          }
+        }
+      },
+
+      NewExpression(node) {
+        if (node.callee.type === 'Identifier' && node.callee.name === 'Function') {
+          issues.push({
+            type: 'ast',
+            severity: 'high',
+            description: 'Використання new Function() - динамічне виконання коду',
+            location: locationFor(node)
           });
         }
       }
     });
-    
+
   } catch (error) {
-    // Якщо не вдається парсити файл, це може бути підозрілим
     if (error.name === 'SyntaxError') {
       issues.push({
         type: 'ast',
@@ -262,7 +383,7 @@ async function analyzeJavaScriptFile(filePath, basePath) {
       });
     }
   }
-  
+
   return issues;
 }
 
@@ -270,22 +391,42 @@ async function analyzeJavaScriptFile(filePath, basePath) {
  * Розрахунок рівня ризику
  */
 function calculateRisk(issues) {
-  if (issues.length === 0) {
+  if (!issues || issues.length === 0) {
     return 'safe';
   }
-  
-  const highSeverityCount = issues.filter(issue => issue.severity === 'high').length;
-  const mediumSeverityCount = issues.filter(issue => issue.severity === 'medium').length;
-  
-  if (highSeverityCount >= 2) {
+
+  const weights = { high: 3, medium: 2, low: 1 };
+  const counts = { high: 0, medium: 0, low: 0 };
+  let totalScore = 0;
+
+  for (const issue of issues) {
+    const rawSeverity = issue?.severity || 'medium';
+    const severity = ['high', 'medium', 'low'].includes(rawSeverity) ? rawSeverity : 'medium';
+    counts[severity] += 1;
+    totalScore += weights[severity];
+  }
+
+  if (counts.high >= 2 || totalScore >= 6) {
     return 'malicious';
   }
-  
-  if (highSeverityCount >= 1 || mediumSeverityCount >= 3) {
+
+  if (counts.high >= 1) {
     return 'suspicious';
   }
-  
-  return 'suspicious';
+
+  if (counts.medium >= 1) {
+    return 'suspicious';
+  }
+
+  if (totalScore >= 3) {
+    return 'suspicious';
+  }
+
+  if (totalScore > 0) {
+    return 'low';
+  }
+
+  return 'safe';
 }
 
 module.exports = {

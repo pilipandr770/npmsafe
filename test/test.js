@@ -82,7 +82,29 @@ async function runTests() {
     cleanup(suspiciousPackage);
   }
   
-  // Test 3: Malicious package with eval
+  // Test 2b: Lifecycle script without dangerous patterns
+  console.log('Test 2b: Lifecycle script without dangerous patterns');
+  const lowLifecyclePackage = createTestPackage({
+    name: 'low-lifecycle-package',
+    version: '1.0.0',
+    scripts: {
+      postinstall: 'echo "hello"',
+      start: 'node index.js'
+    }
+  });
+  
+  try {
+    const result = await analyzePackage(lowLifecyclePackage);
+    assert.strictEqual(result.risk, 'low', 'Базовий lifecycle скрипт має бути low');
+    assert.ok(result.issues.length > 0, 'Має бути хоча б одна проблема');
+    console.log('✅ Пройдено\n');
+  } catch (error) {
+    console.log('❌ Провалено:', error.message, '\n');
+  } finally {
+    cleanup(lowLifecyclePackage);
+  }
+  
+// Test 3: Malicious package with eval
   console.log('Test 3: Зловмисний пакет з eval');
   const maliciousPackage = createTestPackage({
     name: 'malicious-package',
@@ -113,7 +135,9 @@ async function runTests() {
   console.log('Test 4: Розрахунок рівня ризику');
   try {
     assert.strictEqual(calculateRisk([]), 'safe', 'Без проблем = safe');
+    assert.strictEqual(calculateRisk([{ severity: 'low' }]), 'low', 'Одна low проблема = low');
     assert.strictEqual(calculateRisk([{ severity: 'medium' }]), 'suspicious', 'Medium проблема = suspicious');
+    assert.strictEqual(calculateRisk([{ severity: 'low' }, { severity: 'low' }, { severity: 'low' }]), 'suspicious', 'Багато low = suspicious');
     assert.strictEqual(calculateRisk([{ severity: 'high' }, { severity: 'high' }]), 'malicious', '2+ high = malicious');
     console.log('✅ Пройдено\n');
   } catch (error) {
@@ -134,6 +158,86 @@ async function runTests() {
     console.log('✅ Пройдено\n');
   } catch (error) {
     console.log('❌ Провалено:', error.message, '\n');
+  }
+  
+  // Test 6: Виявлення new Function
+  console.log('Test 6: Виявлення new Function');
+  const newFunctionPackage = createTestPackage(
+    {
+      name: 'new-function-package',
+      version: '1.0.0'
+    },
+    {
+      'index.js': `const dangerous = new Function("return process.env.SECRET;");
+dangerous();`
+    }
+  );
+  
+  try {
+    const result = await analyzePackage(newFunctionPackage);
+    assert.ok(
+      result.issues.some(issue => issue.description.includes('new Function')),
+      'Має виявити використання new Function()'
+    );
+    console.log('✅ Пройдено\n');
+  } catch (error) {
+    console.log('❌ Провалено:', error.message, '\n');
+  } finally {
+    cleanup(newFunctionPackage);
+  }
+  
+  // Test 7: Виявлення require("child_process")
+  console.log('Test 7: Виявлення require("child_process")');
+  const childProcessPackage = createTestPackage(
+    { name: 'child-process-package', version: '1.0.0' },
+    {
+      'index.js': `const cp = require('child_process');
+cp.exec('ls');`
+    }
+  );
+  
+  try {
+    const result = await analyzePackage(childProcessPackage);
+    assert.ok(
+      result.issues.some(issue => issue.description.includes('Виконання системних команд')),
+      'Має виявити виклик exec() через alias'
+    );
+    assert.ok(
+      result.issues.some(issue => issue.description.includes('child_process')),
+      'Має виявити імпорт child_process'
+    );
+    console.log('✅ Пройдено\n');
+  } catch (error) {
+    console.log('❌ Провалено:', error.message, '\n');
+  } finally {
+    cleanup(childProcessPackage);
+  }
+  
+// Test 8: Виявлення деструктуризації child_process
+  console.log('Test 8: Виявлення деструктуризації child_process');
+  const destructuredPackage = createTestPackage(
+    { name: 'destructured-child-process', version: '1.0.0' },
+    {
+      'index.js': `const { execSync: run } = require('child_process');
+run('ls');`
+    }
+  );
+  
+  try {
+    const result = await analyzePackage(destructuredPackage);
+    assert.ok(
+      result.issues.some(issue => issue.description.includes('Деструктуризація') || issue.description.includes('child_process модуля через require')),
+      'Має виявити імпорт через деструктуризацію'
+    );
+    assert.ok(
+      result.issues.some(issue => issue.description.includes('Виконання системних команд') && issue.location.includes('index.js')),
+      'Має виявити виклик execSync() через alias run'
+    );
+    console.log('✅ Пройдено\n');
+  } catch (error) {
+    console.log('❌ Провалено:', error.message, '\n');
+  } finally {
+    cleanup(destructuredPackage);
   }
   
   console.log('🎉 Всі тести завершено!');

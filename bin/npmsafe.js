@@ -65,7 +65,8 @@ function printTextReport(result, verbose) {
 function getRiskIcon(risk) {
   switch (risk) {
     case 'safe': return '🟢';
-    case 'suspicious': return '🟡';
+    case 'low': return '🟡';
+    case 'suspicious': return '🟠';
     case 'malicious': return '🔴';
     default: return '⚫';
   }
@@ -74,6 +75,7 @@ function getRiskIcon(risk) {
 function getExitCode(risk, strict) {
   switch (risk) {
     case 'safe': return 0;
+    case 'low': return strict ? 2 : 1;
     case 'suspicious': return strict ? 2 : 1;
     case 'malicious': return 2;
     default: return 3;
