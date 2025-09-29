@@ -1,4 +1,4 @@
-﻿name: CI
+name: CI
 
 on:
   push:
@@ -24,6 +24,31 @@ jobs:
 
       - name: Run tests
         run: npm test
+
+      - name: Generate JSON security report
+        id: npmsafe
+        run: |
+          set +e
+          node bin/npmsafe.js . --format json > security-report.json
+          exit_code=$?
+          echo "scan_exit_code=$exit_code" >> $GITHUB_OUTPUT
+          exit 0
+
+      - name: Upload security report
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-report
+          path: security-report.json
+
+      - name: Warn on suspicious risk
+        if: steps.npmsafe.outputs.scan_exit_code == '1'
+        run: echo "::warning::npmsafe reported suspicious risk level. Review security-report.json artifact."
+
+      - name: Fail on malicious risk
+        if: steps.npmsafe.outputs.scan_exit_code == '2'
+        run: |
+          echo "::error::npmsafe reported malicious risk level."
+          exit 2
 
   assistant-plan:
     if: ${{ secrets.OPENAI_API_KEY != '' }}

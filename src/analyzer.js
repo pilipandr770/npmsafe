@@ -2,6 +2,15 @@ const fs = require('fs');
 const path = require('path');
 const { parse } = require('acorn');
 const { ancestor: walkAncestor } = require('acorn-walk');
+let tsCompiler = null;
+try {
+  tsCompiler = require('typescript');
+} catch (error) {
+  tsCompiler = null;
+}
+
+const SEVERITY_WEIGHTS = { high: 3, medium: 2, low: 1 };
+const normalizeSeverity = (value) => (value && SEVERITY_WEIGHTS[value]) ? value : 'medium';
 
 /**
  * Аналіз пакету на предмет безпеки
@@ -36,7 +45,32 @@ async function analyzePackage(packagePath, options = {}) {
   
   // Визначення рівня ризику
   const risk = calculateRisk(issues);
-  
+
+  const severityCounts = { high: 0, medium: 0, low: 0 };
+  const typeBreakdown = {};
+  issues.forEach(issue => {
+    const severity = normalizeSeverity(issue?.severity);
+    severityCounts[severity] += 1;
+    const typeKey = issue.type || 'unknown';
+    typeBreakdown[typeKey] = (typeBreakdown[typeKey] || 0) + 1;
+  });
+
+  const topIssues = issues
+    .slice()
+    .sort((a, b) => SEVERITY_WEIGHTS[normalizeSeverity(b?.severity)] - SEVERITY_WEIGHTS[normalizeSeverity(a?.severity)])
+    .slice(0, 3)
+    .map(issue => ({
+      type: issue.type,
+      severity: normalizeSeverity(issue?.severity),
+      description: issue.description,
+      location: issue.location || null
+    }));
+
+  stats.totalIssues = issues.length;
+  stats.severityCounts = severityCounts;
+  stats.typeBreakdown = typeBreakdown;
+  stats.topIssues = topIssues;
+
   return {
     packageName: packageInfo.packageJson.name || path.basename(packageInfo.basePath),
     version: packageInfo.packageJson.version || 'unknown',
@@ -97,8 +131,11 @@ function findJavaScriptFiles(basePath, maxFiles = 50) {
         
         if (stats.isDirectory() && !excludeDirs.includes(item)) {
           scanDir(fullPath, depth + 1);
-        } else if (stats.isFile() && (item.endsWith('.js') || item.endsWith('.mjs'))) {
-          jsFiles.push(fullPath);
+        } else if (stats.isFile()) {
+          const ext = path.extname(item).toLowerCase();
+          if (['.js', '.mjs', '.cjs', '.ts', '.tsx'].includes(ext)) {
+            jsFiles.push(fullPath);
+          }
         }
       }
     } catch (error) {
@@ -168,8 +205,51 @@ async function analyzeJavaScriptFile(filePath, basePath) {
   try {
     const content = fs.readFileSync(filePath, 'utf8');
     const relativePath = path.relative(basePath, filePath);
-    
-    const locationFor = node => `${relativePath}:${node.loc?.start.line || '?'}`;
+    const ext = path.extname(filePath).toLowerCase();
+    const isTypeScript = ext === '.ts' || ext === '.tsx';
+    let parseContent = content;
+    let usedTranspiler = false;
+
+    if (isTypeScript) {
+      if (!tsCompiler) {
+        issues.push({
+          type: 'ast',
+          severity: 'medium',
+          description: 'TypeScript ????, ??? ?????????? typescript ???????? ? ??????????',
+          location: relativePath
+        });
+        return issues;
+      }
+      try {
+        const transpileOptions = {
+          compilerOptions: {
+            target: tsCompiler.ScriptTarget.ES2022,
+            module: tsCompiler.ModuleKind.ESNext,
+            jsx: ext === '.tsx' ? tsCompiler.JsxEmit.React : tsCompiler.JsxEmit.None
+          },
+          fileName: path.basename(filePath)
+        };
+        parseContent = tsCompiler.transpileModule(content, transpileOptions).outputText;
+        usedTranspiler = true;
+      } catch (error) {
+        issues.push({
+          type: 'ast',
+          severity: 'medium',
+          description: '?? ??????? ????????????? TypeScript',
+          details: error.message,
+          location: relativePath
+        });
+        return issues;
+      }
+    }
+
+    const locationFor = node => {
+      const line = node.loc?.start.line;
+      if (line && !usedTranspiler) {
+        return `${relativePath}:${line}`;
+      }
+      return relativePath;
+    };
     const suspiciousChildProcessMethods = new Set(['exec', 'spawn', 'fork', 'execSync', 'spawnSync', 'execFile', 'execFileSync']);
     const childProcessAliases = new Set();
     const childProcessMethodAliases = new Set();
@@ -221,8 +301,8 @@ async function analyzeJavaScriptFile(filePath, basePath) {
     }
 
     // Парсинг AST
-    const ast = parse(content, { 
-      ecmaVersion: 2022, 
+    const ast = parse(parseContent, { 
+      ecmaVersion: 'latest', 
       sourceType: 'module',
       allowReturnOutsideFunction: true,
       allowHashBang: true,
@@ -395,15 +475,13 @@ function calculateRisk(issues) {
     return 'safe';
   }
 
-  const weights = { high: 3, medium: 2, low: 1 };
   const counts = { high: 0, medium: 0, low: 0 };
   let totalScore = 0;
 
   for (const issue of issues) {
-    const rawSeverity = issue?.severity || 'medium';
-    const severity = ['high', 'medium', 'low'].includes(rawSeverity) ? rawSeverity : 'medium';
+    const severity = normalizeSeverity(issue?.severity);
     counts[severity] += 1;
-    totalScore += weights[severity];
+    totalScore += SEVERITY_WEIGHTS[severity];
   }
 
   if (counts.high >= 2 || totalScore >= 6) {
