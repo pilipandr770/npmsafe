@@ -1,0 +1,19 @@
+name: "Feature request"
+description: "Запит на функцію"
+title: "feat: "
+labels: ["feature"]
+body:
+  - type: input
+    id: context
+    attributes:
+      label: Контекст
+      placeholder: "Чому це потрібно?"
+    validations:
+      required: true
+  - type: textarea
+    id: spec
+    attributes:
+      label: Специфікація/DoD
+      placeholder: "Що саме робити, критерії приймання"
+    validations:
+      required: true
