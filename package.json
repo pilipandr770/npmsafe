@@ -1,0 +1,31 @@
+{
+  "name": "npmsafe",
+  "version": "1.0.0",
+  "description": "npmsafe — інструмент для захисту від supply-chain атак у npm. Перевіряє пакети до інсталяції: AST-аналіз, виявлення підозрілих скриптів (postinstall, eval, child_process), JSON-звіти та інтеграція в CI. Легкий CLI-сканер для розробників і команд.",
+  "main": "src/index.js",
+  "bin": {
+    "npmsafe": "./bin/npmsafe.js"
+  },
+  "scripts": {
+    "test": "node test/test.js",
+    "start": "node bin/npmsafe.js"
+  },
+  "keywords": [
+    "security",
+    "npm",
+    "supply-chain",
+    "ast",
+    "cli",
+    "vulnerability"
+  ],
+  "author": "Andrii Pylypchuk",
+  "license": "MIT",
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "dependencies": {
+    "acorn": "^8.15.0",
+    "acorn-walk": "^8.3.4",
+    "commander": "^14.0.1"
+  }
+}
